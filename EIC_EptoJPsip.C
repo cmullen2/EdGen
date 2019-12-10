@@ -1,0 +1,157 @@
+{
+
+  //Construct generator
+  TEGGenerator* generator=new TEGGenerator();
+  
+  //make benchmark to monitor timing
+  TBenchmark* bm=new TBenchmark();
+  bm->Start("Epto3pi");
+
+ //construct dummy reaction particle
+  TEGEICReaction* pr=new TEGEICReaction("Reaction");
+  pr->SetIsTrack(kFALSE);//don't track this);
+  generator->SetReaction(pr);
+
+  //make phase space reaction decay direct to 3 pi+ p
+  TEGDecTwoBody* decay1=new TEGDecTwoBody();
+  decay1->SetIsWCosTh();
+  TEGDistDsigDt* dist1=new TEGDistDsigDt(4.0);
+  decay1->SetDistribution((TEGDistribution*)dist1);
+  // dist1->SetPhiDist(new TF1("PhotAsym","1+[0]*0.8*cos(2*x)",-TMath::Pi(),TMath::Pi()));
+   //dist1->SetPhiDist(new TF1("PhotAsym","1+[0]*0.8*cos(2*x)",1-0.0001,1.0001));
+ 
+  dist1->SetReaction(pr);
+  //dist1->SettMin(1);
+  //dist1->SettMax(1.5);
+  //set decay channel to reaction
+  pr->AddDecayChannel(decay1,1);//(decay,branchingratio)
+  // add particles to decay
+  //  TEGParticle* pi=decay1->AddProduct(211,"pip");//a pi+
+  //pi->SetIsTrack(kTRUE);//don't track this
+  TEGParticle* rho=decay1->AddProduct(443,"Jpsi");
+  rho->SetIsTrack(kFALSE);//don't track this
+
+  TEGParticle* proton=decay1->AddProduct(2212,"proton");
+  pr->FixCurrDecay(0);
+  //decay phi
+  TEGDecay* decay2=new TEGDecay();
+  rho->AddDecayChannel(decay2,1);
+  TEGParticle* em=decay2->AddProduct(11,"em");
+  TEGParticle* ep=decay2->AddProduct(-11,"ep");
+
+  Float_t Te=sqrt(10*10+0.0005*0.0005)-0.0005;
+  Float_t Tp=sqrt(100*100+0.938272*0.938272)-0.938272;
+   //Float_t CrossAngle=50E-3;//50mrad
+  Float_t CrossAngle=0;//50mrad
+ //make a target
+  TEGParticle *target=new TEGParticle("target",2212,pr);
+  target->SetIsTrack(kFALSE);//don't store target
+  TEGDistribution* distTar=new TEGDistribution();
+  distTar->SetERange(Tp,Tp);
+  distTar->SetE(Tp);
+  Float_t Thp=TMath::Pi()-CrossAngle;
+  distTar->SetThetaRange(Thp,Thp);
+  target->SetDistribution(distTar);
+
+  
+  //make the beam
+  TEGParticle* beam=new TEGParticle("beam",11,NULL);
+  beam->SetIsTrack(kFALSE);//don't store beam
+  TEGDistribution* distBeam=new TEGDistribution();
+  //can create realistic beam characteristics
+  //at moment have fixed energy as varying would mean recalculating the 
+  //VPhoton distribution each time, can perhaps use foam to make 3D dist 
+  distBeam->SetERange(Te,Te);
+  distBeam->SetE(Te);
+  //distBeam->SetERange(4,4);
+  //distBeam->SetE(4);
+  Float_t The=CrossAngle;
+  distBeam->SetThetaRange(The,The);
+  beam->SetDistribution(distBeam);
+
+  //create beam decay (really e- scattering)
+  TEGDecay* eScat=new TEGDecay();
+  //give e- scatter to e- beam
+  beam->AddDecayChannel(eScat);
+  TEGParticle* eprime=eScat->AddProduct(11,"eprime");
+  TEGParticle* gstar=eScat->AddProduct(-22,"gstar");//-22 defined as virtual photon in TEGGenerator()
+  
+  gstar->SetIsTrack(kFALSE);//don't track this for GEMC
+
+  //create virtual photon distribution
+  TEGDistEScat* vPhot=new TEGDistEScat();
+
+  // vPhot->SetE0(Ee);
+  Double_t E0=2131.63;
+  vPhot->SetE0(2131.63);
+
+  //vPhot->SetE0(4.000510999);
+  vPhot->SetIsScatETh();
+  //set ranges
+  //  Double_t Eemin=12.9894;//min scattered electron energy
+  // Double_t Eemax=2110.31;//max scattered electron energy
+  Double_t Eemin=0.01*E0;//min scattered electron energy
+  Double_t Eemax=0.99*E0;//max scattered electron energy
+  vPhot->SetERange(Eemin,Eemax);  //set eprime E range
+  Double_t thmin=1E-5; //min scatter angle convert to rad
+  //  Double_t thmax=1./100; //max scatter angle convert to rad
+  Double_t thmax=0.001; //max scatter angle convert to rad
+  vPhot->SetThetaRange(thmin,thmax);//set eprime theta range
+
+  //give distribution to e- scatter
+  eScat->SetDistribution(vPhot);
+  
+  pr->SetInitial1(beam);
+  pr->SetInitial2(target);
+
+  pr->Initialise();
+
+
+  //Get the eprime distribution
+  TF2* f2=vPhot->Get2Distribution();
+  //increase Npoints, default is 30, this decreases binning artifacts
+  //actually should be Ok if not defining dist from histogram
+  f2->SetNpx(100);
+  f2->SetNpy(2000);
+  //calculate number of events per second
+  //integrated cross section*Luminosity*microbarns*2pi
+  Double_t cross_sec=25*1E-3;//photoproduction cross section microbarns
+  //Double_t Lumin=5E33;
+  Double_t Lumin=1E34;
+  //  Double_t rate=f2->Integral(Eemin,Eemax,thmin,thmax)*1E35*1E-30*2*TMath::Pi();
+  Double_t rate=cross_sec*f2->Integral(Eemin,Eemax,thmin,thmax)*Lumin*1E-30*2*TMath::Pi() * 0.06; //0.06 branch ratio
+  //60s*60minute*24hours*24 days.
+  Double_t TIME=24*60*60; //seconds
+  
+  cout<<rate <<" "<<TIME<<" "<<rate*TIME<<" "<<f2->Integral(Eemin,Eemax,thmin,thmax)<<endl;
+  // exit(0);
+  Int_t NFiles=1;
+  for(Int_t j=0;j<NFiles;j++){
+    TEGOutGEMC* outg=new TEGOutGEMC();
+    outg->SetFileName(Form("EICdata/EptoJpsi_t4_%d.ld",j));//Output file name
+    generator->SetOutput(dynamic_cast<TEGOutput*>(outg));
+
+    for(Int_t i=0;i<rate*TIME/NFiles;i++){
+      if(i%1000==0)cout<<"event "<<i<<endl;
+      generator->GenerateEvent();
+      // exit(0);
+    }
+
+  bm->Stop("Epto3pi");
+  outg->Close();
+  delete outg;
+  }
+   cout<<rate <<" "<<TIME<<" "<<rate*TIME<<" "<<f2->Integral(Eemin,Eemax,thmin,thmax)<<endl;
+ // for(Int_t i=0;i<rate*TIME;i++){
+  // //for(Int_t i=0;i<100000;i++){
+  //   if(i%1==0)cout<<"event "<<i<<endl;
+  //   generator->GenerateEvent();
+  // }
+
+  bm->Stop("Epto3pi");
+  // outg->Close();
+
+  cout<<"time "<<bm->GetCpuTime("Epto3pi")<<" real "<<bm->GetRealTime("Epto3pi")
+<<endl;
+ 
+}

@@ -1,0 +1,419 @@
+#include "TEGParticle.h"
+#include "TEGDecay.h"
+#include "TEGDecTwoBody.h"
+#include "TEGDistribution.h"
+#include "TDatabasePDG.h"
+#include "TDecayChannel.h"
+
+ClassImp(TEGParticle)
+
+//-----------------------------------------------------------------------------
+TEGParticle::TEGParticle(){
+  fPDG=NULL;               // PDG particle properties
+  fParent=NULL;            // parent particle (if decay product)
+  fP4=NULL;                // 4 momentum in Lab frame
+  fPol=NULL;                   //Polarisation vector
+  fDecayParts=NULL;         // list of decay products
+  fIsDecay=kFALSE;  //by default doesn't decay
+  fIsTrack=kTRUE;  //by default do track
+  fCurrDecay=NULL;
+  fDecays=NULL;
+  fDist=NULL;
+  fVertex=NULL;
+  fDecVertex=NULL;
+  fMassDist=NULL;
+  fBranchRatio=NULL;
+  fDecVertexTime=NULL;
+  fForceDecay=-1;
+  fLifetime=0;
+}
+TEGParticle::TEGParticle(const Char_t* name, Int_t pdg, TEGParticle* parent):TNamed(name,name)
+{
+  //construct a new particle based on it pdg ID
+  fMassDist=NULL;
+  fPDGcode=pdg;               // PDG particle properties
+  if(TDatabasePDG::Instance()->GetParticle(fPDGcode)){
+    fPDG=TDatabasePDG::Instance()->GetParticle(fPDGcode);
+    fPDGMass=fPDG->Mass();
+    if(fPDG->Width()){
+      fMassDist=new TF1(TString(name)+TString("_mass"),"TMath::BreitWigner(x,[0],[1])",fPDG->Mass()-5*fPDG->Width(),fPDG->Mass()+5*fPDG->Width());
+      fMassDist->SetParameters(fPDG->Mass(),fPDG->Width());
+    }
+    // fLifetime=fPDG->Lifetime();//only has lifetimes for particles with large widths/short lifetimes!!!!
+  }
+  else {
+    cerr<<"TEGParticle::TEGParticle("<<name<<","<<pdg<<","<<parent<<")"<<endl;
+    cerr<<"Particle does not exist in TDatabasePDG"<<endl;
+    //return;
+    //perhaps should just exit programme at this point.
+  }
+  fParent=NULL;            // parent particle (if decay product)
+
+  fP4=NULL;                // 4 momentum in Lab frame
+  fPol=NULL;                   //Polarisation vector
+  fVertex=NULL;
+  fDecVertex=NULL;
+  fDecayParts=NULL;         // list of decay products
+  fDecVertexTime=NULL;
+  fIsDecay=kFALSE;  //by default doesn't decay
+  fIsTrack=kTRUE;  //by default do track
+  fDecVertexTime=NULL;
+  fLifetime=0;
+  //construct default particle 4 vector and polarisation
+  fP4=new TLorentzVector(0,0,0,fPDG->Mass());
+  fMinMass=fDynamicMass=fPDG->Mass();
+  fPol=new TVector3(0,0,0);
+  fVertex=new TVector3(0,0,0);
+  fDecVertex=new TVector3(0,0,0);
+  //construct its decay particle array
+  fDecayParts=new TObjArray();
+  fNdecays=0;
+  // fDecayParts->SetOwner(kTRUE); //particle will be deleted by fDecayParts
+  //construct array of possible decays for this particle
+  fDecays=new TObjArray();
+  fDecays->SetOwner(kTRUE);
+  fCurrDecay=NULL;
+  fDist=NULL;
+  fBranchRatio=NULL;
+  fForceDecay=-1;
+  //cout<<" TEGParticle::TEGParticle1 constructed a " <<fPDG->GetName()<<" sample mass "<<fPDGMass<<endl;
+  //As ROOT pdg table does not include lifetimes unless particle has width, hack them in here
+  // const char *name; const char *title;Double_t mass; Bool_t stable;
+  // Double_t width; Double_t charge;const char* ParticleClass;
+  // Int_t PDGcode;
+  // Int_t Anti;
+  // Int_t TrackingCode;
+
+  // if(pdg==3112)TParticlePDG* p = new TParticlePDG(name, title, mass, stable, width,charge, ParticleClass, PDGcode, Anti,TrackingCode);
+
+}
+TEGParticle::TEGParticle(const Char_t* name):TNamed(name,name)
+{
+  TEGParticle();
+  fPDG=NULL;
+  //construct a new particlefrom its LorentzVector
+  fPDGcode=0;               // PDG particle properties
+  fParent=NULL;            // parent particle (if decay product)
+  fDecVertexTime=NULL;
+
+  fP4=new TLorentzVector();                // 4 momentum in Lab frame
+  fPol=new TVector3();                   //Polarisation vector
+  fVertex=new TVector3(0,0,0);
+  fDecVertex=new TVector3(0,0,0);
+  fDecayParts=NULL;         // list of decay products
+  fIsDecay=kFALSE;  //by default doesn't decay
+  fIsTrack=kTRUE;  //by default do track
+  fLifetime=0;
+  //construct its decay particle array
+  fDecayParts=new TObjArray();
+  fNdecays=0;
+  // fDecayParts->SetOwner(kTRUE); //particle will be deleted by fDecayParts
+  //construct array of possible decays for this particle
+  fDecays=new TObjArray();
+  fDecays->SetOwner(kTRUE);
+  fDist=NULL;
+  fMassDist=NULL;
+  fBranchRatio=NULL;
+  fForceDecay=-1;
+}
+TEGParticle::~TEGParticle(){
+  if(fP4) delete fP4;
+  if(fPol) delete fPol;
+  if(fDecayParts) delete fDecayParts;
+  if(fDecays) delete fDecays;
+  //if(fBranchRatio) delete fBranchRatio;
+}
+void TEGParticle::Initialise(){
+  cout<<"TEGParticle::Initialise() "<<GetName()<<" "<<fPDG<<endl;
+  //if a decay has not been defined previously just use PDG decays
+  //if user decay is specified, the user should call SetPDGDecays
+  //although the branching ratio would have to be worked out
+  if((!fDecays->GetEntries())&&fPDG)SetPDGDecays();
+  //  if(!fIsDecay)return;//initialise decay stuff below
+  if(fPDG||fLifetime){//if Lifetime set outwith PDG use that instead
+    Double_t width=1;
+    if(fPDG)width=fPDG->Width();
+    if(width>0){
+      if(!fLifetime)fLifetime=fPDG->Lifetime();
+      if(fLifetime*3E8*100>0.1){ //detach vertex if mean free path>1mm
+	fDecVertexTime=new TF1(GetName()+TString("LT"),"TMath::Exp(-x/[0])",0,10*fLifetime);
+	fDecVertexTime->SetParameter(0,fLifetime);
+	cout<<"TEGParticle::Initialise() initialise lifetime distribution with t="<<fLifetime<<endl;
+      }
+      else fLifetime=0;
+    }
+  }
+
+    //Initialise decays
+  for(Int_t i=0;i<fNdecays;i++)
+    {
+      //cout<<fNdecays<<" "<<i<<" "<<fDecays<<endl;
+      fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(i));
+      // cout<<fCurrDecay<<endl;
+      fCurrDecay->Initialise();
+    }
+
+  fMinMass=1E10;
+  fMaxThresh=0;
+  
+  if(fNdecays==0){
+    fMinMass=CalcMinMass();
+    fMaxThresh=CalcMinMass();
+  }
+  if(fNdecays==1){
+    cout<<"TEGParticle::Initialise() 1 Decay "<<endl;
+    fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(0));
+    //cout<<fCurrDecay<<" get thershold"<<endl;
+    if(fMinMass>fCurrDecay->GetThreshold())fMinMass=fCurrDecay->GetThreshold();
+    //cout<<fCurrDecay<<" get thershold2"<<endl;
+
+    if(fMaxThresh<fCurrDecay->GetThreshold())fMaxThresh=fCurrDecay->GetThreshold();
+    //cout<<fCurrDecay<<" get thershold end"<<endl;
+
+  }
+  //decay is forced so use that
+  else  if(fForceDecay>=0&&fForceDecay<fNdecays){
+    cout<<"TEGParticle::Initialise() Forced Decay"<<endl;
+    fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(fForceDecay));
+    if(fMinMass>fCurrDecay->GetThreshold())fMinMass=fCurrDecay->GetThreshold();
+    if(fMaxThresh<fCurrDecay->GetThreshold())fMaxThresh=fCurrDecay->GetThreshold();
+  }
+  else{
+    cout<<"TEGParticle::Initialise() Many Decays "<<endl;
+
+    //find the minimum allowed mass, either decay threshold or mass-2*width
+    for(Int_t i=0;i<fNdecays;i++){
+      fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(i));
+      if(fMinMass>fCurrDecay->GetThreshold())fMinMass=fCurrDecay->GetThreshold();
+      if(fMaxThresh<fCurrDecay->GetThreshold())fMaxThresh=fCurrDecay->GetThreshold();
+    }
+  }
+  //cout<<"calc min mass "<<fPDG<<" "<<GetName()<<endl;
+  if(fMinMass<CalcMinMass()) fMinMass=CalcMinMass();
+  //cout<<"set mass dist range "<<endl;
+  if(!fPDG){if(fMassDist)fMassDist->SetRange(fMinMass,fPDG->Mass()+5*fPDG->Width());}
+  else if(fPDG->PdgCode()==10){
+  //first for the special case EGMeson
+    cout<<"EGMESON"<<endl;
+    if(!fMassDist){cout<<"TEGParticle::Initialise Error need to set EGMeson distribution for "<<GetName()<<endl;exit(0);}
+    Double_t EGmax,EGmin;
+    fMassDist->GetRange(EGmin,EGmax);
+    if(fMaxThresh<EGmin)fMinMass=EGmin; //take minumum mass for dist not threshold
+    else fMinMass=fMaxThresh;
+    fMassDist->SetRange(fMinMass,EGmax);
+    //cout<<"M range "<<fMinMass<<" "<<EGmax<<endl;
+  }
+  else  if(fMassDist)fMassDist->SetRange(fMinMass,fPDG->Mass()+5*fPDG->Width());
+  //redo for the case EGMeson
+
+  cout<<"TEGParticle::Initialise "<<GetName()<<" "<<fMinMass<<" "<<fMaxThresh<<endl;
+}
+void TEGParticle::AddDecayChannel(TEGDecay* decay,Double_t bratio){
+  fIsDecay=kTRUE;
+  decay->SetMother(this);
+  fDecays->Add((decay));
+  fBranchRatio.Set(fNdecays+1);
+  fBranchRatio.AddAt(bratio,fNdecays);
+  fNdecays++;
+}
+void TEGParticle::SetPDGDecays(){
+  //hack!!! Don't want to decay pi+-, K+-, gamm,e-
+  if(fPDGcode==321||fPDGcode==-321||fPDGcode==211||fPDGcode==-211||fPDGcode==22||fPDGcode==11||fPDGcode==-11) return;
+  if(!(fPDG->ParticleClass()==TString("Baryon")||(fPDG->ParticleClass()==TString("Meson"))))return;
+  Int_t nc=0;//number of decay channels
+  if(!(nc=fPDG->NDecayChannels())) return;
+  fIsDecay=kTRUE;
+  TEGDecay* dec=NULL;
+  for(Int_t chan=0;chan<nc;chan++){
+    TDecayChannel* dc=fPDG->DecayChannel(chan);
+    if(dc->NDaughters()==2){dec=new TEGDecTwoBody();(static_cast<TEGDecTwoBody*>(dec))->SetIsWCosTh();}
+    else dec=new TEGDecay();
+    AddDecayChannel(dec,dc->BranchingRatio());
+    for(Int_t d=0;d<dc->NDaughters();d++){
+     //construct unique name: particletype_daughter#_channel#_mothername
+      TString pname(TDatabasePDG::Instance()->GetParticle(dc->DaughterPdgCode(d))->GetName()+TString("_"));
+     ((((pname+=d)+="_")+=chan)+="_")+=GetName();
+     //part->SetName(pname);
+     //TEGParticle* part= dec->AddProduct(dc->DaughterPdgCode(d),pname);
+     dec->AddProduct(dc->DaughterPdgCode(d),pname);
+   }
+    // fBranchRatio.Set(fNdecays+1);
+    // fBranchRatio.AddAt(dc->BranchingRatio(),fNdecays);
+    // cout<<"TEGParticle::SetPDGDecays() "<<GetName()<<" Add decay channel with branching ratio "<<fBranchRatio.At(fNdecays)<<endl;
+    //dec->Initialise();
+    // fDecays->Add(dec);
+    // fNdecays++;
+  }
+}
+TLorentzVector* TEGParticle::GenerateInitialP4(Int_t d){
+  //only valid for intitial state particles
+  //with upto 1 possible decay
+  //returns random 4 vector from beam distribution
+  //or decays beam and returns chosen 4 vector
+  //default case d=0 can be used when no decay
+  //see TEGDecay::GenDecay( ) case 1
+  //if no energy limits set in TDistribution,
+  //particle will be at rest
+  //if an intial distribution defined use it
+ //else if no decays return current 4 vector
+  if(fDist){
+    *fP4=*(fDist->GenerateP4(CalcDynamicMass()));
+    // return fP4;
+  }
+  //  cout<<" TEGParticle::GenerateInitialP4 "<<fP4->M()<<" "<<fP4->E()<<" "<<fP4->Theta()<<endl;
+ // if(fNdecays>0){;
+ //    //else if decays return a choesn decay product 
+ //   cout<<" TEGParticle::GenerateInitialP4 seems ther eis ia decay"<<endl;
+ //    TEGDecay* dec=dynamic_cast<TEGDecay*>(fDecays->At(0));
+
+ //    dec->GenDecay(); //should calc fP4 too   
+ //    return dec->GetProductP4(d);   
+ //  }
+  return fP4;
+}
+Bool_t TEGParticle::Decay(){
+  //testing so do all set decays
+  // if(!fNdecays)return;
+  // TIter nextd( fDecays );
+  // TEGDecay* d=NULL;
+  // Bool_t=DidIt;
+  // for(Int_t i=0;i<fNdecays;i++){
+  //   d=static_cast<TEGDecay*>(nextd());
+  //   DidIt=d->GenDecay();
+  // }
+  // return DidIt;
+  if(fNdecays==0)return kFALSE;
+  if(!ChooseDecay()) return kFALSE;  //select which decay this event is, return if threshold not reached 
+  // fCurrDecay->FindDaughterMasses(); //get final state masses
+  //cout<<"TEGParticle::Decay() about to generate random"<<endl;
+  //  fCurrDecay->GenerateRandom(); //if no defined distribution nothing done
+  //cout<<"TEGParticle::Decay() done generate random"<<endl;
+
+  //decay vertex
+  CalcDecVertex();
+  Bool_t IsOK=kFALSE;
+  while (!IsOK){
+    fCurrDecay->FindDaughterMasses(); //get final state masses
+    //cout<<"TEGParticle::Decay() about to generate random"<<endl;
+    fCurrDecay->GenerateRandom(); //if no defined distribution nothing done
+    // if(GetName()==TString("Reaction"))fCurrDecay->GetDistribution()->SetM(fP4->M());//for now overwrite decay mass with reaction mass
+    //cout<<"TEGParticle::Decay() done generate random"<<endl;
+    IsOK= fCurrDecay->GenDecay();
+    if(!IsOK)cout<<"Trying again "<<fP4->M()<<endl;
+  }
+  if(IsOK){
+    //loop over products and decay them 
+    TIter nextp(fCurrDecay->GetProducts());
+    TEGParticle* particle=NULL;
+    // cout<<"TEGParticle::Decay() "<<this->GetName()<<endl;
+    while((particle = static_cast<TEGParticle*>(nextp()))){
+      particle->SetVertex(fDecVertex);
+      //if exists add to generator particle list for event
+      //this can then be saved
+      // if(TEGGenerator* ge=TEGGenerator::Generator()) 
+      // 	ge->AddParticleToEvent(particle);
+      // cout<<GetName()<<" "<<fP4->M()<<" TEGParticle::Decay() daughter "<<particle->GetName()<<" "<<particle->GetP4()->M()<<endl;
+      if(particle->IsDecay())IsOK=particle->Decay();
+      if(!IsOK) return IsOK;
+    }  
+  }
+  return IsOK;
+}
+void TEGParticle::FixCurrDecay(Int_t i){
+  //useful if just want to set final state p4 with no reaction 
+  fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(i));
+}
+TEGDecay* TEGParticle::GetDecay(Int_t i){
+ return dynamic_cast<TEGDecay*>(fDecays->At(i));
+}
+
+TEGDecay*  TEGParticle::ChooseDecay(){
+  // cout<<"TEGDecay*  TEGParticle::ChooseDecay()"<<endl;
+  //only 1 decay so obvious
+  if(fNdecays==1){
+    fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(0));
+    if(fP4->M()>=fCurrDecay->GetThreshold()) return fCurrDecay;
+    else{ cout<<GetName()<<" TEGParticle::ChooseDecay() below threshold 1 "<<fP4->M()<<" "<<fCurrDecay->GetThreshold()<<endl;fCurrDecay=NULL;exit(0);}
+    return fCurrDecay;//temp, need to fix
+  }
+  //decay is forced so use that
+    if(fForceDecay>=0&&fForceDecay<fNdecays){
+    fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(fForceDecay));
+    if(fP4->M()>=fCurrDecay->GetThreshold()) return fCurrDecay;
+    else {cout<<GetName()<<" TEGParticle::ChooseDecay() below threshold 2 "<<fP4->M()<<" "<<fCurrDecay->GetThreshold()<<endl;fCurrDecay=NULL;}
+    return fCurrDecay;
+  }
+    Double_t sum=0;
+    if(fMaxThresh<fP4->M()){//no threshold issues just choose with branching ratio
+    Double_t ran=gEGRandom->Uniform();
+      // cout<<"done"<<endl;
+      //Needs updated with weighting between decay channels
+      //need to create default branching ratio array
+      for(Int_t i=0;i<fNdecays;i++){
+	//fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(i));
+	sum+=fBranchRatio.At(i);
+	//	IsAllowed[i]=fP4->M()>fCurrDecay->GetThreshold();//is this decay above thr
+	//  cout<<i<<" "<<ran<<" "<<sum<<endl;
+	if(ran<sum)
+	  return  fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(i));
+      }
+    }
+    else {//check which decays above threshold
+      Int_t IsAbove[fNdecays];
+      Double_t brtotal=1;
+      for(Int_t i=0;i<fNdecays;i++){
+	fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(i));
+	if(fP4->M()>=fCurrDecay->GetThreshold()) IsAbove[i]=1;
+	else {IsAbove[i]=0;brtotal-=fBranchRatio.At(i);}
+      }
+      Double_t ran=gEGRandom->Uniform(0,brtotal);
+      //now loop over allowed decays
+      for(Int_t i=0;i<fNdecays;i++){
+	sum+=fBranchRatio.At(i);
+	if(!IsAbove[i]){//this one isn't allowed
+	  ran+=fBranchRatio.At(i);
+	  continue;
+	}
+	else if(ran<sum)
+	  {
+	    //	    cout<< "TEGParticle::ChooseDecay() "<<ran<<" "<<sum<<" "<<brtotal<<" "<<fBranchRatio.At(i)<<" "<<i<<endl;
+	    return fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(i));
+      }
+    }
+
+   }
+
+//cout<<"Warning! TEGDecay*  TEGParticle::ChooseDecay() branching ratios add up to "<< sum<<" for "<<GetName()<<" "<<fMaxThresh<<" "<<fMinMass<<" "<<fP4->M()<<" "<<endl;
+  // return fCurrDecay=dynamic_cast<TEGDecay*>(fDecays->At(0));
+  return fCurrDecay=NULL;
+}
+void  TEGParticle::AddToEvent(TObjArray* event){
+  //  cout<<"TEGParticle::AddToEvent "<<GetName()<<" "<<event<<" "<<fCurrDecay<<endl;
+  if(fIsTrack)event->Add(this);//add this particle
+  //loop over its decay products and add them too
+  if(!fIsDecay) return;
+  TIter nextprod(fCurrDecay->GetProducts());
+  TEGParticle *particle=NULL;
+  while( (particle = (TEGParticle*)nextprod()) ){
+    // cout<<"adding "<<particle->GetName()<<endl;
+    particle->AddToEvent(event);  
+  }
+}
+void  TEGParticle::CalcDecVertex(){
+  if(!fDecVertexTime){
+    fDecVertex->SetXYZ(0,0,0);
+    (*fDecVertex)+=(*fVertex);
+    return;
+  }
+  //if particle does not decay immediatly can have detached vertex
+  Double_t t0=fDecVertexTime->GetRandom();
+  Double_t len=t0*fP4->Gamma()*299792458*fP4->Beta();
+  // Double_t len=t0*299792458;
+  TVector3 vec=fP4->Vect();
+  fDecVertex->SetXYZ(vec.X(),vec.Y(),vec.Z());//direction
+  if(vec.Mag())fDecVertex->SetMag(len);
+  else fDecVertex->SetMag(0);
+  (*fDecVertex)+=(*fVertex);  //decay vertex+ initial vertex
+
+  // cout<<GetName()<<" Vertex "<<fDecVertex->X()<<" "<<fDecVertex->Y()<<" "<<fDecVertex->Z()<<" "<<fDecVertex->Mag()<<" after time "<<t0*1E9<<" "<<fP4->Gamma()*fP4->Beta()<<" "<<len<<" "<<vec.Mag()<<endl;
+}

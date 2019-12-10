@@ -1,0 +1,96 @@
+#ifndef __TEGDecay_h__
+#define __TEGDecay_h__
+
+#include "Riostream.h"
+#include "TObjArray.h"
+#include "TArrayI.h"
+#include "TNamed.h"
+#include "TRandom3.h"
+#include "TLorentzVector.h"
+using namespace std;
+
+class TEGParticle;
+class TEGDistribution;
+
+class TEGDecay : public TNamed {
+  //can probably just deal with 4 vectors here
+  //and set the TEGParticles in that class
+  //actually might want to have TEGParticles that can calulate its mass
+  //like TMCResonance, can check particlePDG for width
+  //Want to have options to have fixed products or vary each event
+
+ protected:
+  TEGParticle* fMother;          //The particle being decayed
+  TLorentzVector* fP4;           // 4 momentum of decay particle(lab)
+  TObjArray* fProducts;       // TEGParticle Array of decay products
+  TLorentzVector**  fP4d;        // 4 momenta of decay product particles
+  Double_t*       fMd;         // decay product particle masses
+  Int_t           fNd;          // number of decay products
+  Double_t        fTcm;          // kinetic energy in CM
+  Double_t        fWt;           // weight for particular event
+  Double_t        fWtMax;        // maximum weight
+  Int_t*          fProdPDG;      //array of decay product pdg codes
+  TEGDistribution* fDist;   //distribution for random nummbers
+  Double_t fThreshold;  //threshold mass=sum of product masses
+  Int_t fNRes; //# decay products resonances
+  TArrayI fIsRes;
+  TVector3 fDirection;  //unit vector in mother momentum
+ public:
+  TEGDecay( );
+  virtual ~TEGDecay();
+
+  virtual void AddProducts(TObjArray* prod){fProducts=prod;};
+  virtual TEGParticle* AddProduct(Int_t pdg,TString name="");
+  virtual void Initialise();
+  virtual void FindDaughterMasses();
+
+  virtual void GenerateRandom();
+  virtual Bool_t GenDecay( );
+  virtual Bool_t GenPhaseSpace( ); //default phase space defined here
+
+  Double_t Pdk(Double_t a, Double_t b, Double_t c); //utility for GenPhaseSpace
+  virtual void BoostLab( );
+
+  void SetMother(TEGParticle* moth);
+  void SetDistribution(TEGDistribution* dist){fDist=dist;}
+  TEGDistribution* GetDistribution(){return fDist;}
+
+  TObjArray* GetProducts(){return fProducts;}
+  TEGParticle* GetProduct(Int_t p);
+  TLorentzVector* GetProductP4(Int_t p){return fP4d[p];}
+  TEGParticle* GetProductByClass(TString type);
+  Int_t GetNProduct(){return fNd;}
+  Double_t GetThreshold(){return fThreshold;}
+
+  ClassDef(TEGDecay,1)
+};
+
+inline Double_t TEGDecay::Pdk(Double_t a, Double_t b, Double_t c) 
+{
+  // Utility for phase space decay method
+
+  Double_t x = (a-b-c)*(a+b+c)*(a-b+c)*(a+b-c);
+  x = TMath::Sqrt(x)/(2*a);
+  return x;
+}
+inline void TEGDecay::BoostLab( ) //should try standard root boost method
+{
+  // Final boost of all decay particles from the centre of mass of the parent
+  // particle to the lab frame.
+  // Fixed for cases where beam direction is not along z-axis
+  //Note this seems to be fixed in newer ROOT versions so remove rotation
+  Double_t thR = fP4->Theta();
+  Double_t phiR = fP4->Phi();
+  Double_t th = fP4->Theta()*TMath::RadToDeg();
+  for ( Int_t n=0; n<fNd; n++ ){
+    th = fP4d[n]->Theta()*TMath::RadToDeg();
+    fP4d[n]->Boost(0,0,fP4->P()/fP4->E());
+    //fP4d[n]->Boost(fP4->BoostVector());
+    fP4d[n]->RotateY(thR);
+    fP4d[n]->RotateZ(phiR);
+    th = fP4d[n]->Theta()*TMath::RadToDeg();
+  }
+}
+#endif
+
+

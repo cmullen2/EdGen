@@ -1,0 +1,31 @@
+#ifndef __TEGDistribution_h__
+#define __TEGDistribution_h__
+//Abstract base class for different distributions
+//used by TEGDecay classes to produce random numbers
+
+
+#include "Riostream.h"
+#include "TRandom3.h"
+
+class TEGDistribution  {
+ 
+ protected:
+  Double_t *fRN;  //array of random numbers, requires 
+  //enumerator map to be defined in concrete class
+ public:
+  TEGDistribution( ){
+    fRN=NULL;
+  };
+  virtual ~TEGDistribution(){};
+
+  virtual void GenerateRandom()=0;
+
+  Double_t GetRandom(Int_t i){return fRN[i];}
+  Double_t *GetRandom(){return fRN;}
+
+  ClassDef(TEGDistribution,1)
+};
+
+#endif
+
+
